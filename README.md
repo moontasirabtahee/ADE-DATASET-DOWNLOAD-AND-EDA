@@ -55,6 +55,7 @@ This project implements a multi-source data integration framework designed to br
 - **EDA Focus**: Yearly reporting trends and Reaction (REAC) frequency profiling.
 - **Key Finding**: Discovered strong temporal spikes in reporting for specific categories; identified **Death** as a documented outcome in over 15% of sampled reports.
 ![FAERS Distribution](./EDA/images/faers_dist.png)
+![FAERS Heatmap](./EDA/images/faers_heatmap.png)
 
 | primaryid   | pt                       | outcome      | reporter_type   |
 |:------------|:-------------------------|:-------------|:----------------|
@@ -87,7 +88,8 @@ This project implements a multi-source data integration framework designed to br
 - **Scope**: Standardized medical standard (CONCEPT) & 2.3M Claims.
 - **EDA Focus**: Mapping efficiency of RxNorm (Drugs) and SNOMED (Conditions).
 - **Key Finding**: The OMOP spine successfully resolved **98% of chemical identifiers** from disparate sources into a single concept space.
-![OMOP Domains](./EDA/images/omop_domains.png)
+![OMOP Domains](./EDA/images/omop_concept_dist.png)
+![SynPUF Demographics](./EDA/images/synpuf_demographics.png)
 
 ---
 
@@ -106,6 +108,7 @@ The pipeline uses the **OMOP CONCEPT** table as a "Rosetta Stone":
 - **Trigger Drugs**: Warfarin, Heparin, Vancomycin, Furosemide.
 
 ![Overall Coverage](./EDA/images/dataset_coverage.png)
+![ADE Signals](./EDA/images/master_ade_signals.png)
 
 ### 3. Detected ADE Summary Table
 | ade_type   | drug         | icd_code   | avg_impact (LOS days) |

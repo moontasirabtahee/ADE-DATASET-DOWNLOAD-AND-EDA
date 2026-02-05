@@ -2,50 +2,41 @@ import pandas as pd
 import os
 import glob
 import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
 import io
 import struct
+import xml.etree.ElementTree as ET
+
+# Attempt to import LZO for SynPUF
+try:
+    import lzo
+except ImportError:
+    lzo = None
 
 # Setup paths
-mimic_path = r'D:\ADE DATASET DOWNLOAD\MIMIC-IV-Demo_extracted'
-vocab_path = r'D:\ADE DATASET DOWNLOAD\omop vocab'
-images_path = r'D:\ADE DATASET DOWNLOAD\EDA\images'
+base_path = r'D:\ADE DATASET DOWNLOAD'
+mimic_path = os.path.join(base_path, 'MIMIC-IV-Demo_extracted')
+vocab_path = os.path.join(base_path, 'omop vocab')
+synpuf_path = os.path.join(base_path, 'SynPUF2.3M')
+faers_path = os.path.join(base_path, 'FAERS', 'FAERSdata')
+sider_path = os.path.join(base_path, 'SIDER')
+drugbank_path = os.path.join(base_path, 'drugbank')
+pgkb_path = os.path.join(base_path, 'PharmaGKB_extracted')
+images_path = os.path.join(base_path, 'EDA', 'images')
 os.makedirs(images_path, exist_ok=True)
 
 plt.style.use('bmh')
+sns.set_palette('husl')
 
-def get_markdown_table(df, name):
-    if df.empty: return f"### {name}\n*No data available*"
-    return f"### {name} (Sample Data)\n\n" + df.head(5).to_markdown(index=False)
-
-def load_mimic_table(module, table_name):
-    module_path = os.path.join(mimic_path, module)
-    search_patterns = [
-        os.path.join(module_path, "**", f"{table_name}.csv.gz"),
-        os.path.join(module_path, "**", f"{table_name}.csv")
-    ]
-    found_files = []
-    for pattern in search_patterns:
-        found_files.extend(glob.glob(pattern, recursive=True))
-    if not found_files:
-        found_files.extend(glob.glob(os.path.join(mimic_path, "**", f"{table_name}.csv*"), recursive=True))
-    if not found_files: return pd.DataFrame()
-    path = found_files[0]
-    compression = 'gzip' if path.endswith('.gz') else None
-    try: return pd.read_csv(path, compression=compression, low_memory=False)
-    except: return pd.DataFrame()
-
-def load_vocab_table(table_name):
-    path = os.path.join(vocab_path, f"{table_name}.csv")
-    if not os.path.exists(path): return pd.DataFrame()
-    try: return pd.read_csv(path, sep='\t', low_memory=False)
-    except: return pd.DataFrame()
+def save_fig(name):
+    plt.savefig(os.path.join(images_path, name), bbox_inches='tight', dpi=150)
+    plt.close()
+    print(f"Saved: {name}")
 
 def load_synpuf_lzo(filename, max_blocks=100):
-    try:
-        import lzo
-    except ImportError: return pd.DataFrame()
-    path = os.path.join(r'D:\ADE DATASET DOWNLOAD\SynPUF2.3M', filename)
+    if lzo is None: return pd.DataFrame()
+    path = os.path.join(synpuf_path, filename)
     if not os.path.exists(path): return pd.DataFrame()
     with open(path, 'rb') as f:
         content = f.read(1000)
@@ -60,96 +51,130 @@ def load_synpuf_lzo(filename, max_blocks=100):
             if not u_data: break
             u_size = struct.unpack('>I', u_data)[0]
             if u_size == 0 or u_size > 1000000: break
-            c_data = f.read(4); c_size = struct.unpack('>I', c_data)[0]
-            f.read(4); comp_data = f.read(c_size)
+            c_data = f.read(4)
+            if not c_data: break
+            c_size = struct.unpack('>I', c_data)[0]
+            f.read(4)
+            comp_data = f.read(c_size)
+            if len(comp_data) < c_size: break
             if c_size < u_size:
-                try: all_data += lzo.decompress(comp_data, False, u_size)
+                try:
+                    decompressed = lzo.decompress(comp_data, False, u_size)
+                    all_data += decompressed
                 except: continue
-            else: all_data += comp_data
+            else:
+                all_data += comp_data
         try:
-            df = pd.read_csv(io.BytesIO(all_data), sep=',', low_memory=False)
-            df = df.loc[:, ~df.columns.duplicated()]
+            return pd.read_csv(io.BytesIO(all_data), sep=',', low_memory=False)
+        except:
+            return pd.DataFrame()
+
+# --- 1. OMOP Plots ---
+def gen_omop_plots():
+    print("Generating OMOP plots...")
+    concept_path = os.path.join(vocab_path, 'CONCEPT.csv')
+    if os.path.exists(concept_path):
+        concept = pd.read_csv(concept_path, sep='\t', low_memory=False)
+        concept.columns = [c.lower() for c in concept.columns]
+        
+        # Concept Distribution 2x2
+        fig, axes = plt.subplots(2, 2, figsize=(20, 14))
+        if 'vocabulary_id' in concept.columns:
+            vc = concept['vocabulary_id'].value_counts().head(20)
+            sns.barplot(x=vc.values, y=vc.index, ax=axes[0,0], palette='viridis')
+            axes[0,0].set_title('Top 20 Vocabularies')
+        
+        if 'domain_id' in concept.columns:
+            dc = concept['domain_id'].value_counts().head(20)
+            sns.barplot(x=dc.values, y=dc.index, ax=axes[0,1], palette='magma')
+            axes[0,1].set_title('Top 20 Domains')
+            
+        if 'concept_class_id' in concept.columns:
+            cc = concept['concept_class_id'].value_counts().head(20)
+            sns.barplot(x=cc.values, y=cc.index, ax=axes[1,0], palette='crest')
+            axes[1,0].set_title('Top 20 Concept Classes')
+            
+        if 'standard_concept' in concept.columns:
+            std_concept = concept['standard_concept'].value_counts()
+            axes[1,1].pie(std_concept.values, labels=std_concept.index, autopct='%1.1f%%', startangle=90)
+            axes[1,1].set_title('Standard Concept Distribution')
+        save_fig('omop_concept_dist.png')
+
+# --- 2. SynPUF Plots ---
+def gen_synpuf_plots():
+    print("Generating SynPUF plots...")
+    person = load_synpuf_lzo('person.5.2.csv.lzo', max_blocks=150)
+    if not person.empty:
+        person.columns = [c.lower() for c in person.columns]
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        if 'year_of_birth' in person.columns:
+            person['age'] = 2026 - person['year_of_birth']
+            sns.histplot(person['age'], bins=25, kde=True, ax=axes[0,0], color='skyblue')
+        if 'gender_concept_id' in person.columns:
+            gc = person['gender_concept_id'].map({8507: 'M', 8532: 'F'}).value_counts()
+            axes[0,1].pie(gc.values, labels=gc.index, autopct='%1.1f%%')
+        if 'race_concept_id' in person.columns:
+            rc = person['race_concept_id'].map({8516: 'B', 8527: 'W'}).value_counts()
+            sns.barplot(x=rc.values, y=rc.index, ax=axes[1,0])
+        save_fig('synpuf_demographics.png')
+
+# --- 3. FAERS Plots ---
+def gen_faers_plots():
+    print("Generating FAERS plots...")
+    def load_faers(prefix):
+        files = glob.glob(os.path.join(faers_path, f'{prefix}*.txt'))
+        if files: 
+            df = pd.read_csv(files[0], sep='$', low_memory=False, nrows=20000)
+            df.columns = [c.lower() for c in df.columns]
             return df
-        except: return pd.DataFrame()
+        return pd.DataFrame()
 
-# 1. Load data and collect samples
-print("\n--- SAMPLE DATA FOR README ---")
+    drug = load_faers('DRUG')
+    reac = load_faers('REAC')
+    if not drug.empty and not reac.empty:
+        merged = pd.merge(drug[['primaryid', 'drugname']], reac[['primaryid', 'pt']], on='primaryid')
+        top_d = merged['drugname'].value_counts().head(10).index
+        top_r = merged['pt'].value_counts().head(10).index
+        pivot = merged[merged['drugname'].isin(top_d) & merged['pt'].isin(top_r)].pivot_table(index='drugname', columns='pt', values='primaryid', aggfunc='count', fill_value=0)
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(pivot, annot=True, fmt='d', cmap='YlOrRd')
+        plt.title('FAERS Drug-Reaction Co-occurrence (Top 10)')
+        save_fig('faers_heatmap.png')
 
-# MIMIC
-prescriptions = load_mimic_table('clinical', 'prescriptions')
-diagnoses = load_mimic_table('clinical', 'diagnoses_icd')
-admissions = load_mimic_table('clinical', 'admissions')
-print(get_markdown_table(admissions, "MIMIC-IV Admissions"))
+# --- 4. PharmGKB Plots ---
+def gen_pgkb_plots():
+    print("Generating PharmGKB plots...")
+    gene_path = os.path.join(pgkb_path, 'genes', 'genes.tsv')
+    if os.path.exists(gene_path):
+        genes = pd.read_csv(gene_path, sep='\t')
+        if 'Is VIP' in genes.columns:
+            plt.figure(figsize=(8, 8))
+            vc = genes['Is VIP'].value_counts()
+            plt.pie(vc.values, labels=vc.index, autopct='%1.1f%%')
+            plt.title('VIP Gene Distribution')
+            save_fig('pgkb_vip.png')
 
-# OMOP
-concept = load_vocab_table('CONCEPT')
-print(get_markdown_table(concept.head(100), "OMOP Concept Dictionary")) # Sample of sample
+# --- 5. MIMIC Plots ---
+def gen_mimic_plots():
+    print("Generating MIMIC plots...")
+    # Top DX
+    dx_path = glob.glob(os.path.join(mimic_path, '**', 'diagnoses_icd.csv*'), recursive=True)
+    if dx_path:
+        compression = 'gzip' if dx_path[0].endswith('.gz') else None
+        dx = pd.read_csv(dx_path[0], compression=compression, nrows=20000)
+        dx.columns = [c.lower() for c in dx.columns]
+        if 'icd_code' in dx.columns:
+            plt.figure(figsize=(10, 6))
+            top_dx = dx['icd_code'].value_counts().head(15)
+            sns.barplot(x=top_dx.values, y=top_dx.index, palette='magma')
+            plt.title('Top 15 MIMIC Diagnosis Codes')
+            save_fig('mimic_top_dx.png')
 
-# FAERS
-f_path = glob.glob(os.path.join(r'D:\ADE DATASET DOWNLOAD\FAERS\FAERSdata', 'REAC*.txt'))
-if f_path:
-    faers_reac = pd.read_csv(f_path[0], sep='$', nrows=5)
-    print(get_markdown_table(faers_reac, "FAERS Adverse Reactions"))
-
-# SIDER
-s_path = r'D:\ADE DATASET DOWNLOAD\SIDER\meddra_all_se.tsv.gz'
-if os.path.exists(s_path):
-    sider_se = pd.read_csv(s_path, sep='\t', names=['cid_a', 'cid_b', 'meddra_id', 'se_type', 'se_name'], compression='gzip', nrows=5)
-    print(get_markdown_table(sider_se, "SIDER Side Effects"))
-
-# DrugBank
-db_path = r'D:\ADE DATASET DOWNLOAD\drugbank\drug links.csv'
-if os.path.exists(db_path):
-    db_links = pd.read_csv(db_path, nrows=5)
-    print(get_markdown_table(db_links, "DrugBank External Links"))
-
-# PharmGKB
-pg_path = r'D:\ADE DATASET DOWNLOAD\PharmaGKB_extracted\drugs\drugs.tsv'
-if os.path.exists(pg_path):
-    pg_drugs = pd.read_csv(pg_path, sep='\t', nrows=5)
-    print(get_markdown_table(pg_drugs, "PharmGKB Drugs"))
-
-# SynPUF
-p_df = load_synpuf_lzo('person.5.2.csv.lzo', max_blocks=50)
-print(get_markdown_table(p_df, "SynPUF Person Records"))
-
-print("\n--- GENERATING PLOTS IN EDA/images ---")
-
-def save_plot(name):
-    plt.tight_layout()
-    plt.savefig(os.path.join(images_path, name))
-    plt.close()
-    print(f"  Saved {name}")
-
-# Global Coverage
-coverage = {'MIMIC': 100, 'DrugBank': 15000, 'SIDER': 5000, 'FAERS': 1200000, 'PharmGKB': 3500, 'SynPUF': 2300000, 'OMOP': 9000000}
-plt.figure(figsize=(12, 6))
-plt.bar(list(coverage.keys()), list(coverage.values()), color='tab:green')
-plt.yscale('log')
-plt.title("Integrated Dataset Scale (Total Entities)")
-save_plot('dataset_coverage.png')
-
-# ADE Summary (MIMIC)
-if not admissions.empty and not prescriptions.empty:
-    plt.figure(figsize=(10, 6))
-    plt.bar(['AKI Signals', 'Bleeding Signals'], [86, 54], color=['blue', 'red'])
-    plt.title("Temporal Clinical Risk Signals (MIMIC-IV)")
-    save_plot('ade_signals.png')
-
-# OMOP Domains
-if not concept.empty:
-    counts = concept['domain_id'].value_counts().head(10).to_dict()
-    plt.figure(figsize=(10, 6))
-    plt.barh(list(counts.keys()), list(counts.values()), color='teal')
-    plt.gca().invert_yaxis()
-    plt.title("Standardized Vocabulary Domains (OMOP)")
-    save_plot('omop_domains.png')
-
-# SIDER Side Effects
-if os.path.exists(s_path):
-    plt.figure(figsize=(12, 6))
-    plt.barh(['Dizziness', 'Nausea', 'Headache', 'Rash', 'Diarrhea'], [1200, 1150, 950, 800, 750], color='navy')
-    plt.title("Prevalent Side Effects (SIDER)")
-    save_plot('sider_prevalence.png')
-
-print("All tasks finished.")
+if __name__ == "__main__":
+    gen_omop_plots()
+    gen_synpuf_plots()
+    gen_faers_plots()
+    gen_pgkb_plots()
+    gen_mimic_plots()
+    # Integration and others already saved usually, but running them ensures completeness
+    print("\nMaster Visual Asset Generation Extended COMPLETE.")
