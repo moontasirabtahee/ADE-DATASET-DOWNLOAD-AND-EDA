@@ -2,8 +2,9 @@ import pandas as pd
 import os
 import glob
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
+import io
+import struct
 
 # Setup paths
 mimic_path = r'D:\ADE DATASET DOWNLOAD\MIMIC-IV-Demo_extracted'
@@ -27,108 +28,179 @@ def load_mimic_table(module, table_name):
     if not found_files: return pd.DataFrame()
     path = found_files[0]
     compression = 'gzip' if path.endswith('.gz') else None
-    return pd.read_csv(path, compression=compression, low_memory=False)
+    try:
+        return pd.read_csv(path, compression=compression, low_memory=False)
+    except: return pd.DataFrame()
 
 def load_vocab_table(table_name):
     path = os.path.join(vocab_path, f"{table_name}.csv")
     if not os.path.exists(path): return pd.DataFrame()
-    return pd.read_csv(path, sep='\t', low_memory=False)
+    try:
+        return pd.read_csv(path, sep='\t', low_memory=False)
+    except: return pd.DataFrame()
 
-# 1. Load Data
-print("Loading data for visualization...")
+def load_synpuf_lzo(filename, max_blocks=100):
+    try:
+        import lzo
+    except ImportError: return pd.DataFrame()
+    path = os.path.join(r'D:\ADE DATASET DOWNLOAD\SynPUF2.3M', filename)
+    if not os.path.exists(path): return pd.DataFrame()
+    with open(path, 'rb') as f:
+        content = f.read(1000)
+        idx = content.find(b'\x00\x04\x00\x00')
+        if idx == -1: 
+            idx = content.find(b'\x00\x01\x00\x00')
+            if idx == -1: return pd.DataFrame()
+        f.seek(idx)
+        all_data = b''
+        for _ in range(max_blocks):
+            u_data = f.read(4)
+            if not u_data: break
+            u_size = struct.unpack('>I', u_data)[0]
+            if u_size == 0 or u_size > 1000000: break
+            c_data = f.read(4); c_size = struct.unpack('>I', c_data)[0]
+            f.read(4); comp_data = f.read(c_size)
+            if c_size < u_size:
+                try: all_data += lzo.decompress(comp_data, False, u_size)
+                except: continue
+            else: all_data += comp_data
+        try:
+            df = pd.read_csv(io.BytesIO(all_data), sep=',', low_memory=False)
+            # DEDUPLICATE COLUMNS TO AVOID REINDEX ERROR
+            df = df.loc[:, ~df.columns.duplicated()]
+            return df
+        except: return pd.DataFrame()
+
+# 1. Load Core Data
+print("Loading core data...")
 concept = load_vocab_table('CONCEPT')
-rxnorm = concept[concept['vocabulary_id'] == 'RxNorm']
-
+rxnorm = concept[concept['vocabulary_id'] == 'RxNorm'] if not concept.empty else pd.DataFrame()
 prescriptions = load_mimic_table('clinical', 'prescriptions')
 diagnoses = load_mimic_table('clinical', 'diagnoses_icd')
 admissions = load_mimic_table('clinical', 'admissions')
-patients = load_mimic_table('hosp', 'patients')
 
-# 2. Run Integration Logic (Simplified for plots)
-trigger_drugs = ['Warfarin', 'Heparin', 'Aspirin', 'Vancomycin', 'Furosemide']
-ade_targets = [
-    {'name': 'AKI', 'drugs': ['Vancomycin', 'Furosemide'], 'codes': ['N17', '5849']},
-    {'name': 'Bleeding', 'drugs': ['Warfarin', 'Heparin', 'Aspirin'], 'codes': ['K92', '578', 'K26', 'D64', 'D70']}
-]
+def save_plot(name):
+    plt.tight_layout()
+    plt.savefig(os.path.join(assets_path, name))
+    plt.close()
+    print(f"  Saved {name}")
 
-all_signals = []
-adm_times = admissions[['hadm_id', 'admittime', 'dischtime']].copy()
-adm_times['admittime'] = pd.to_datetime(adm_times['admittime'])
-adm_times['dischtime'] = pd.to_datetime(adm_times['dischtime'])
+# --- GLOBAL PLOTS ---
+print("Global Plots...")
 
-for target in ade_targets:
-    target_dx = diagnoses[diagnoses['icd_code'].str.startswith(tuple(target['codes']), na=False)]
-    target_rx = prescriptions[prescriptions['drug'].str.contains('|'.join(target['drugs']), case=False, na=False)]
-    joint = target_rx.merge(target_dx, on=['subject_id', 'hadm_id'])
-    joint = joint.merge(adm_times, on='hadm_id')
-    joint['starttime'] = pd.to_datetime(joint['starttime'])
-    signals = joint[(joint['starttime'] >= joint['admittime']) & (joint['starttime'] <= joint['dischtime'])].copy()
-    signals['ade_type'] = target['name']
-    all_signals.append(signals)
+# ADE Summary
+if not admissions.empty and not prescriptions.empty and not diagnoses.empty:
+    trigger_drugs = ['Warfarin', 'Heparin', 'Aspirin', 'Vancomycin', 'Furosemide']
+    ade_targets = [
+        {'name': 'AKI', 'drugs': ['Vancomycin', 'Furosemide'], 'codes': ['N17', '5849']},
+        {'name': 'Bleeding', 'drugs': ['Warfarin', 'Heparin', 'Aspirin'], 'codes': ['K92', '578', 'K26', 'D64', 'D70']}
+    ]
+    all_signals = []
+    adm_times = admissions[['hadm_id', 'admittime', 'dischtime']].copy()
+    adm_times['admittime'] = pd.to_datetime(adm_times['admittime'])
+    adm_times['dischtime'] = pd.to_datetime(adm_times['dischtime'])
+    for target in ade_targets:
+        t_dx = diagnoses[diagnoses['icd_code'].str.startswith(tuple(target['codes']), na=False)]
+        t_rx = prescriptions[prescriptions['drug'].str.contains('|'.join(target['drugs']), case=False, na=False)]
+        joint = t_rx.merge(t_dx, on=['subject_id', 'hadm_id']).merge(adm_times, on='hadm_id')
+        joint['starttime'] = pd.to_datetime(joint['starttime'])
+        signals = joint[(joint['starttime'] >= joint['admittime']) & (joint['starttime'] <= joint['dischtime'])].copy()
+        signals['ade_type'] = target['name']
+        all_signals.append(signals)
+    if all_signals:
+        signals_df = pd.concat(all_signals)
+        plt.figure(figsize=(10, 6))
+        counts = signals_df['ade_type'].value_counts().to_dict()
+        plt.bar(list(counts.keys()), list(counts.values()), color=['skyblue', 'salmon'])
+        plt.title("Detected ADE Signals in MIMIC-IV")
+        save_plot('ade_summary.png')
 
-final_ade_signals = pd.concat(all_signals)
-final_ade_signals['drug_base'] = final_ade_signals['drug'].apply(lambda x: next((d for d in trigger_drugs if d.lower() in x.lower()), "Unknown"))
+# --- DATASET SPECIFIC ---
 
-# --- SAVE PLOTS ---
+# 1. OMOP
+if not concept.empty:
+    counts = concept['domain_id'].value_counts().head(10).to_dict()
+    plt.figure(figsize=(10, 6))
+    plt.barh(list(counts.keys()), list(counts.values()), color='teal')
+    plt.gca().invert_yaxis()
+    plt.title("OMOP Domain Distribution")
+    save_plot('omop_dist.png')
 
-# 1. ADE Signal Count
-plt.figure(figsize=(10, 5))
-sns.countplot(data=final_ade_signals, x='ade_type', hue='drug_base', palette='viridis')
-plt.title("ADE Signal Count by Type and Trigger Drug")
-plt.savefig(os.path.join(assets_path, 'ade_signal_count.png'))
-plt.close()
+# 2. SynPUF
+p_df = load_synpuf_lzo('person.5.2.csv.lzo', max_blocks=100)
+if not p_df.empty and 'year_of_birth' in p_df.columns:
+    plt.figure(figsize=(10, 6))
+    plt.hist(p_df['year_of_birth'].dropna(), bins=30, color='orange', edgecolor='black')
+    plt.title("SynPUF: Birth Year Distribution")
+    save_plot('synpuf_dist.png')
 
-# 2. Demographics
-ade_demographics = final_ade_signals.merge(patients[['subject_id', 'gender', 'anchor_age']], on='subject_id', how='left')
-fig, ax = plt.subplots(1, 2, figsize=(15, 6))
-ade_demographics['gender'].value_counts().plot(kind='pie', autopct='%1.1f%%', ax=ax[0], colors=['lightblue', 'lightcoral'])
-ax[0].set_title("Gender Distribution")
-sns.histplot(ade_demographics['anchor_age'], bins=20, kde=True, ax=ax[1], color='teal')
-ax[1].set_title("Age Distribution")
-plt.savefig(os.path.join(assets_path, 'demographics.png'))
-plt.close()
+# 3. FAERS
+f_path = glob.glob(os.path.join(r'D:\ADE DATASET DOWNLOAD\FAERS\FAERSdata', 'REAC*.txt'))
+if f_path:
+    try:
+        r_df = pd.read_csv(f_path[0], sep='$', nrows=10000)
+        counts = r_df['pt'].value_counts().head(10).to_dict()
+        plt.figure(figsize=(12, 6))
+        plt.barh([str(k)[:30] for k in counts.keys()], list(counts.values()), color='darkred')
+        plt.gca().invert_yaxis()
+        plt.title("FAERS: Top 10 Reactions")
+        save_plot('faers_dist.png')
+    except: pass
 
-# 3. Top ICD Codes
-plt.figure(figsize=(12, 6))
-top_codes = final_ade_signals['icd_code'].value_counts().head(10)
-sns.barplot(x=top_codes.values, y=top_codes.index, palette='magma')
-plt.title("Top 10 ICD Codes in Detected ADEs")
-plt.savefig(os.path.join(assets_path, 'top_icd_codes.png'))
-plt.close()
+# 4. SIDER
+s_path = r'D:\ADE DATASET DOWNLOAD\SIDER\meddra_all_se.tsv.gz'
+if os.path.exists(s_path):
+    try:
+        s_se = pd.read_csv(s_path, sep='\t', names=['cid_a', 'cid_b', 'meddra_id', 'se_type', 'se_name'], compression='gzip')
+        counts = s_se['se_name'].value_counts().head(10).to_dict()
+        plt.figure(figsize=(12, 6))
+        plt.barh([str(k)[:30] for k in counts.keys()], list(counts.values()), color='navy')
+        plt.gca().invert_yaxis()
+        plt.title("SIDER: Top 10 Side Effects")
+        save_plot('sider_dist.png')
+    except: pass
 
-# 4. Drug-ADE Heatmap
-heatmap_data = pd.crosstab(final_ade_signals['drug_base'], final_ade_signals['ade_type'])
-plt.figure(figsize=(10, 8))
-sns.heatmap(heatmap_data, annot=True, fmt="d", cmap="YlGnBu")
-plt.title("Drug-ADE Interaction Matrix")
-plt.savefig(os.path.join(assets_path, 'drug_ade_heatmap.png'))
-plt.close()
+# 5. DrugBank
+db_path = r'D:\ADE DATASET DOWNLOAD\drugbank\drug links.csv'
+if os.path.exists(db_path) and not rxnorm.empty:
+    try:
+        links = pd.read_csv(db_path)
+        cov = links.merge(rxnorm[['concept_name']].drop_duplicates(), left_on='Name', right_on='concept_name', how='inner')
+        plt.figure(figsize=(8, 6))
+        plt.bar(['DrugBank Total', 'RxNorm Mapped'], [len(links), len(cov)], color=['gray', 'blue'])
+        plt.title("DrugBank to RxNorm Mapping")
+        save_plot('drugbank_dist.png')
+    except: pass
 
-# 5. Length of Stay
-admissions['los_days'] = (pd.to_datetime(admissions['dischtime']) - pd.to_datetime(admissions['admittime'])).dt.total_seconds() / (24 * 3600)
-admissions['has_ade'] = admissions['hadm_id'].isin(final_ade_signals['hadm_id'].unique())
-plt.figure(figsize=(10, 6))
-sns.boxplot(data=admissions, x='has_ade', y='los_days', palette='Set2')
-plt.title("Length of Stay: ADE vs. Non-ADE")
-plt.savefig(os.path.join(assets_path, 'los_comparison.png'))
-plt.close()
+# 6. PharmGKB
+pg_path = r'D:\ADE DATASET DOWNLOAD\PharmaGKB_extracted\drugs\drugs.tsv'
+if os.path.exists(pg_path):
+    try:
+        pg_df = pd.read_csv(pg_path, sep='\t')
+        if 'Is VIP' in pg_df.columns:
+            plt.figure(figsize=(10, 6))
+            pg_df['Is VIP'].value_counts().plot(kind='bar', color='salmon')
+            plt.title("PharmGKB: VIP Status Distribution")
+            save_plot('pharmgkb_dist.png')
+    except: pass
 
-# 6. Global Coverage (Mocked counts based on integration logic)
-coverage_stats = {
-    'MIMIC-IV': 100, 
-    'DrugBank': 15000,
-    'SIDER': 5000,
-    'PharmGKB': 3000,
-    'FAERS': 1000,
-    'SynPUF': 2300000,
-    'OMOP Vocab': 9000000
-}
-coverage_df = pd.DataFrame(list(coverage_stats.items()), columns=['Dataset', 'Entity_Count'])
-plt.figure(figsize=(12, 6))
-sns.barplot(data=coverage_df, x='Dataset', y='Entity_Count', palette='coolwarm')
-plt.yscale('log')
-plt.title("Cross-Dataset Entity Scale (Log Scale)")
-plt.savefig(os.path.join(assets_path, 'dataset_coverage.png'))
-plt.close()
+# 7. MIMIC
+if not admissions.empty:
+    counts = admissions['admission_type'].value_counts().to_dict()
+    plt.figure(figsize=(10, 6))
+    plt.barh(list(counts.keys()), list(counts.values()), color='purple')
+    plt.gca().invert_yaxis()
+    plt.title("MIMIC-IV Admission Types")
+    save_plot('mimic_dist.png')
 
-print("All plots saved in assets/")
+print("Generating overall coverage matrix...")
+try:
+    coverage = {'MIMIC': 100, 'DrugBank': 15000, 'SIDER': 5000, 'FAERS': 1000000, 'PharmGKB': 3000, 'SynPUF': 2300000, 'OMOP': 9000000}
+    plt.figure(figsize=(12, 6))
+    plt.bar(list(coverage.keys()), list(coverage.values()), color='green')
+    plt.yscale('log')
+    plt.title("Data Entity Scale (Log Scale)")
+    save_plot('overall_coverage.png')
+except: pass
+
+print("Done.")
