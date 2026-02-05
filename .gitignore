@@ -1,0 +1,38 @@
+# Data directories
+FAERS/
+FAERS-data-toolkit/
+MIMIC-IV-Demo/
+MIMIC-IV-Demo_extracted/
+PharmaGKB/
+PharmaGKB_extracted/
+SIDER/
+SynPUF2.3M/
+drugbank/
+omop vocab/
+
+# Python virtual environment
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# IDE settings
+.vscode/
+
+# Logs and temporary files
+*.log
+*.json
+file_list.csv
+FaersFilesWebUrls.txt
+
+# Generated reports
+EDA/*.csv
+EDA/*.md
+!EDA/08_cross_dataset_integration_eda.ipynb
+!EDA/01_omop_vocab_eda_enhanced.ipynb
+!EDA/02_synpuf_eda.ipynb
+!EDA/03_faers_eda.ipynb
+!EDA/04_sider_eda.ipynb
+!EDA/05_drugbank_eda.ipynb
+!EDA/06_pharmgkb_eda.ipynb
+!EDA/07_mimic_iv_demo_eda.ipynb
