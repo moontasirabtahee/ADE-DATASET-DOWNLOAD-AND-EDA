@@ -33,7 +33,7 @@ def save_fig(name):
     plt.close()
     print(f"Saved: {name}")
 
-def load_synpuf_lzo(filename, max_blocks=100):
+def load_synpuf_lzo(filename, max_blocks=100, names=None):
     if lzo is None: return pd.DataFrame()
     path = os.path.join(synpuf_path, filename)
     if not os.path.exists(path): return pd.DataFrame()
@@ -60,7 +60,10 @@ def load_synpuf_lzo(filename, max_blocks=100):
                 try: decompressed = lzo.decompress(comp_data, False, u_size); all_data += decompressed
                 except: continue
             else: all_data += comp_data
-        try: return pd.read_csv(io.BytesIO(all_data), sep=',', low_memory=False)
+        try: 
+            if names:
+                return pd.read_csv(io.BytesIO(all_data), sep=',', names=names, low_memory=False)
+            return pd.read_csv(io.BytesIO(all_data), sep=',', low_memory=False)
         except: return pd.DataFrame()
 
 # --- 1. OMOP ---
@@ -73,15 +76,15 @@ def gen_omop_plots():
         fig, axes = plt.subplots(2, 2, figsize=(20, 14))
         if 'vocabulary_id' in concept.columns:
             vc = concept['vocabulary_id'].value_counts().head(20)
-            sns.barplot(x=vc.values, y=vc.index, ax=axes[0,0], palette='viridis')
+            sns.barplot(x=vc.values, y=vc.index, ax=axes[0,0], hue=vc.index, palette='viridis', legend=False)
             axes[0,0].set_title('Top 20 Vocabularies')
         if 'domain_id' in concept.columns:
             dc = concept['domain_id'].value_counts().head(20)
-            sns.barplot(x=dc.values, y=dc.index, ax=axes[0,1], palette='magma')
+            sns.barplot(x=dc.values, y=dc.index, ax=axes[0,1], hue=dc.index, palette='magma', legend=False)
             axes[0,1].set_title('Top 20 Domains')
         if 'concept_class_id' in concept.columns:
             cc = concept['concept_class_id'].value_counts().head(20)
-            sns.barplot(x=cc.values, y=cc.index, ax=axes[1,0], palette='crest')
+            sns.barplot(x=cc.values, y=cc.index, ax=axes[1,0], hue=cc.index, palette='crest', legend=False)
             axes[1,0].set_title('Top 20 Concept Classes')
         if 'standard_concept' in concept.columns:
             std = concept['standard_concept'].value_counts()
@@ -92,9 +95,10 @@ def gen_omop_plots():
 # --- 2. SynPUF ---
 def gen_synpuf_plots():
     print("Generating SynPUF plots...")
-    person = load_synpuf_lzo('person.5.2.csv.lzo', max_blocks=100)
+    # Define columns for headerless files
+    person_cols = ['person_id', 'gender_concept_id', 'year_of_birth', 'month_of_birth', 'day_of_birth', 'time_of_birth', 'race_concept_id']
+    person = load_synpuf_lzo('person.5.2.csv.lzo', max_blocks=100, names=person_cols)
     if not person.empty:
-        person.columns = [c.lower() for c in person.columns]
         fig, axes = plt.subplots(1, 2, figsize=(16, 6))
         if 'year_of_birth' in person.columns:
             person['age'] = 2026 - person['year_of_birth']
@@ -106,9 +110,9 @@ def gen_synpuf_plots():
             axes[1].set_title('Gender Distribution')
         save_fig('synpuf_demographics.png')
 
-    visits = load_synpuf_lzo('visit_occurrence.5.2.csv.0.lzo', max_blocks=100)
+    visit_cols = ['visit_id', 'person_id', 'visit_concept_id', 'visit_start_date', 'visit_start_datetime', 'visit_end_date', 'visit_end_datetime']
+    visits = load_synpuf_lzo('visit_occurrence.5.2.csv.0.lzo', max_blocks=100, names=visit_cols)
     if not visits.empty:
-        visits.columns = [c.lower() for c in visits.columns]
         if 'visit_concept_id' in visits.columns:
             plt.figure(figsize=(8, 6))
             v_map = {9201: 'Inpatient', 9202: 'Outpatient', 9203: 'Emergency'}
