@@ -73,6 +73,17 @@ This framework bridges the gap between raw clinical evidence and curated scienti
     ![SynPUF Visits](./EDA/images/synpuf_visits.png)
     *   **Insight**: Distinguishes Inpatient vs. Outpatient encounters, essential for determining clinical setting impact.
 
+### 📋 Dataset Architecture Summary
+
+| Dataset | Primary Role | ADE Info Type | Biases & Limitations | Target Layer & Usage |
+| :--- | :--- | :--- | :--- | :--- |
+| **FAERS** | **Signal Source** | **Association** (Spontaneous Reports) | Reporting bias, Weber effect, missing denominator (exposure unknown), duplicate reports. | **Silver (OMOP CDM)**<br>Mapped to `CONDITION_OCCURRENCE` and `DRUG_EXPOSURE` to form the core observational event repository. |
+| **SynPUF** | **Ground Truth Proxy** | **Phenotype** (Synthetic Claims) | Synthetic artifacts, lack of biological causality (no new discovery), simplified complexity. | **Silver (OMOP CDM)**<br>Loaded as standard OMOP tables for pipeline testing and method validation without privacy risks. |
+| **OMOP Vocab** | **Semantic Reference** | **Semantic Backbone** | Mapping loss from source codes, US-centric bias (RxNorm), update lag. | **Silver (Reference)**<br>The standardization dictionary (`CONCEPT` tables) underpinning the entire Silver layer. |
+| **DrugBank** | **External Knowledge** | **Mechanism** / Causality Hint | Commercial restrictions, focus on approved drugs, mechanism gaps for off-label use. | **Gold (Knowledge Graph)**<br>Mapped in Silver, but primarily used to create dense drug embeddings/features for the ML model. |
+| **SIDER** | **Ground Truth** | **Phenotype** (Side Effects) | NLP extraction errors, defensive labeling (legal vs. biological), lacks frequency data. | **Gold (Labels)**<br>Defines "Positive" labels (Known ADRs) to distinguish true signals from noise in FAERS. |
+| **PharmGKB** | **Knowledge** | **Mechanism** (Genomic) | Ancestry bias (European overrepresented), sparsity of clinical genomic data. | **Gold (Features)**<br>Provides specific risk features for patient stratification based on drug-gene interactions. |
+
 ---
 
 ## 🔗 Master Integration: The ADE Discovery Hub
